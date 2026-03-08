@@ -133,3 +133,31 @@ docker-compose up -d --build
 ---
 
 *Projeto desenvolvido para fim de estudos voltado para a Engenharia de Dados*
+
+```mermaid
+graph LR
+    %% Definindo os nós e ícones
+    API((☁️ API OpenWeatherMap))
+    JSON_RAW[📄 weather_data.json]
+    PARQUET[🧊 temp_data.parquet]
+    DB[(🛢️ PostgreSQL: sp_weather)]
+
+    %% Definindo a caixa do Airflow
+    subgraph "Orquestração: Apache Airflow (Docker)"
+        T1(🐍 Task: extract)
+        T2(🐼 Task: transform)
+        T3(⚙️ Task: load)
+    end
+
+    %% Conectando o fluxo
+    API -->|Requisição HTTP| T1
+    T1 -->|Salva| JSON_RAW
+    JSON_RAW -->|Lê| T2
+    T2 -->|Limpa e Converte fuso| PARQUET
+    PARQUET -->|Lê via Pandas| T3
+    T3 -->|SQLAlchemy| DB
+
+    %% Estilização (Cores)
+    style API fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style DB fill:#316192,color:#fff,stroke:#333
+    style PARQUET fill:#fff,stroke:#150458,stroke-width:2px
