@@ -20,16 +20,15 @@ O sistema consome a API do **OpenWeatherMap**, realiza a limpeza e desestrutura�
 
 Abaixo, a representação visual do fluxo de dados e a integração entre as ferramentas:
 
-![Arquitetura do Pipeline](https://raw.githubusercontent.com/matheusaraujodata98/pipelines_etl_eng_dados_weather/main/arquitetura.png)
+![Arquitetura do Pipeline](./arquitetura_pipeline.png)
 
 *(Diagrama estrutural do pipeline)*
-
 
 ## 🕒 Agendamento e Frequência (Scheduling)
 
 Para garantir que os dados reflitam as variações climáticas em tempo real, a DAG foi configurada com um intervalo de execução **horário** exato.
 
-* **Cron Expression:** `0 * * * *` (Executa no minuto zero de cada hora)
+* **Cron Expression:** `0 * * * *` (Executa exatamente no minuto zero de cada hora).
 * **Catchup:** Configurado como `False` para evitar a execução de instâncias passadas ao ativar a DAG pela primeira vez, focando apenas nos dados atuais.
 
 Isso permite que o banco de dados `sp_weather` funcione como uma série temporal real, acumulando 24 pontos de dados por dia para análises futuras de tendência e oscilação térmica.
@@ -104,8 +103,7 @@ def load():
     df = pd.read_parquet('/opt/airflow/data/temp_data.parquet')
     load_weather_data('sp_weather', df)
 
-# Definição do fluxo e dependências com agendamento de hora em hora
-# schedule_interval='0 * * * *'
+# Definição do fluxo e dependências
 extract() >> transform() >> load()
 ```
 
