@@ -132,11 +132,4 @@ docker-compose up -d --build
 
 ---
 
-## 👨‍💻 Autor
-
-**Matheus Araujo**
-* [GitHub](https://github.com/matheusaraujodata98)
-* [LinkedIn](https://www.linkedin.com/in/matheus-araujo-dados/)
-
----
 *Projeto desenvolvido para fim de estudos voltado para a Engenharia de Dados*
