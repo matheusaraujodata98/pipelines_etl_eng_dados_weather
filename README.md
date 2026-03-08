@@ -16,6 +16,56 @@ O sistema consome a API do **OpenWeatherMap**, realiza a limpeza e desestrutura�
 
 ---
 
+## 🏗️ Arquitetura do Pipeline
+
+Abaixo, a representação visual do fluxo de dados e a integração entre as ferramentas:
+
+http://googleusercontent.com/image_generation_content/0
+
+*(Diagrama estrutural do pipeline)*
+
+```mermaid
+graph LR
+    %% Definindo os nós e ícones
+    API((☁️ API OpenWeatherMap))
+    JSON_RAW[📄 weather_data.json]
+    PARQUET[🧊 temp_data.parquet]
+    DB[(🛢️ PostgreSQL: sp_weather)]
+
+    %% Definindo a caixa do Airflow
+    subgraph "Orquestração: Apache Airflow (Docker)"
+        T1(🐍 Task: extract)
+        T2(🐼 Task: transform)
+        T3(⚙️ Task: load)
+    end
+
+    %% Conectando o fluxo
+    API -->|HTTP GET| T1
+    T1 -->|Salva Raw| JSON_RAW
+    JSON_RAW -->|Lê| T2
+    T2 -->|Limpa e Modela| PARQUET
+    PARQUET -->|Lê via Pandas| T3
+    T3 -->|SQLAlchemy| DB
+
+    %% Estilização (Cores)
+    style API fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style DB fill:#316192,color:#fff,stroke:#333
+    style PARQUET fill:#fff,stroke:#150458,stroke-width:2px
+```
+
+---
+
+## 🕒 Agendamento e Frequência (Scheduling)
+
+Para garantir que os dados reflitam as variações climáticas em tempo real, a DAG foi configurada com um intervalo de execução **horário**. 
+
+* **Cron Expression:** `@hourly` (ou `0 * * * *`)
+* **Catchup:** Configurado como `False` para evitar a execução de instâncias passadas ao ativar a DAG pela primeira vez, focando apenas nos dados atuais.
+
+Isso permite que o banco de dados `sp_weather` funcione como uma série temporal real, acumulando 24 pontos de dados por dia para análises futuras de tendência e oscilação térmica.
+
+---
+
 ## ⚙️ Detalhamento das Etapas do ETL
 
 ### 📥 ETAPA 1: Extração (Extract)
@@ -94,37 +144,6 @@ Em vez de trafegar o DataFrame diretamente pelo banco de metadados do Airflow (v
 * **Integridade de Dados:** Preserva fielmente os tipos de dados nativos do Pandas (como *datetime* com fuso horário e *floats*), o que se perde em formatos como CSV ou JSON.
 * **Prevenção de Gargalos (XCom Limits):** Evita problemas de serialização e sobrecarga de memória no banco de dados interno do Airflow, que não foi desenhado para transitar grandes volumes de dados.
 
-### 🏗️ Arquitetura do Pipeline
-
-```mermaid
-graph LR
-    %% Definindo os nós e ícones
-    API((☁️ API OpenWeatherMap))
-    JSON_RAW[📄 weather_data.json]
-    PARQUET[🧊 temp_data.parquet]
-    DB[(🛢️ PostgreSQL: sp_weather)]
-
-    %% Definindo a caixa do Airflow
-    subgraph "Orquestração: Apache Airflow (Docker)"
-        T1(🐍 Task: extract)
-        T2(🐼 Task: transform)
-        T3(⚙️ Task: load)
-    end
-
-    %% Conectando o fluxo
-    API -->|HTTP GET| T1
-    T1 -->|Salva Raw| JSON_RAW
-    JSON_RAW -->|Lê| T2
-    T2 -->|Limpa e Modela| PARQUET
-    PARQUET -->|Lê via Pandas| T3
-    T3 -->|SQLAlchemy| DB
-
-    %% Estilização (Cores)
-    style API fill:#f9f9f9,stroke:#333,stroke-width:2px
-    style DB fill:#316192,color:#fff,stroke:#333
-    style PARQUET fill:#fff,stroke:#150458,stroke-width:2px
-```
-
 ---
 
 ## 🚀 Como Configurar e Executar Localmente
@@ -144,7 +163,7 @@ Antes de começar, você precisará ter as seguintes ferramentas instaladas na s
 Abra o seu terminal e execute:
 
 ```bash
-git clone [https://github.com/matheusaraujodata98/pipelines_etl_eng_dados_weather.git](https://github.com/matheusaraujodata98/pipelines_etl_eng_dados_weather.git)
+git clone https://github.com/matheusaraujodata98/pipelines_etl_eng_dados_weather.git
 cd pipelines_etl_eng_dados_weather
 ```
 
