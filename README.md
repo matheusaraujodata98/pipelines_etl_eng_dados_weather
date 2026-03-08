@@ -37,14 +37,10 @@ Nesta etapa, o dado bruto em JSON é processado e modelado para uso analítico a
 
 1. **Ingestão e Achatamento:** O arquivo JSON é lido e convertido em um DataFrame. Utiliza-se a função `pd.json_normalize()` para "achatar" (flatten) as estruturas de dados iniciais.
 2. **Descompactação da coluna 'Weather':** Como a coluna climática vem estruturada como uma lista de dicionários, o script a desmembra para extrair atributos específicos (`weather_id`, `weather_main`, `weather_description` e `weather_icon`), concatenando-os ao DataFrame principal.
-3. **Limpeza de Atributos:** Colunas que não agregam valor analítico ao negócio são descartadas para poupar armazenamento:
-   ```python
-   columns_to_drop = ['weather', 'weather_icon', 'sys.type']
-   ```
+3. **Limpeza de Atributos:** Colunas que não agregam valor analítico ao negócio são descartadas para poupar armazenamento.
 4. **Padronização de Nomenclatura:** Chaves complexas ou aninhadas são renomeadas para o padrão inglês claro (ex: `main.temp` torna-se `temperature`, `sys.sunrise` torna-se `sunrise`).
 5. **Normalização Temporal:** Tratamento de fuso horário, convertendo timestamps Unix para o formato datetime na *timezone* correta de São Paulo:
    ```python
-   columns_to_normalize = ['datetime', 'sunrise', 'sunset']
    # Converte para datetime do fuso horário de São Paulo
    df[col] = pd.to_datetime(df[col], unit='s', utc=True).dt.tz_convert('America/Sao_Paulo')
    ```
@@ -55,21 +51,48 @@ Nesta etapa, o dado bruto em JSON é processado e modelado para uso analítico a
 
 A etapa final persiste os dados transformados em um Data Warehouse/Data Mart local.
 
-1. **Conexão:** Estabelece comunicação segura com o PostgreSQL utilizando `SQLAlchemy`:
-   ```python
-   engine = create_engine(f"postgresql+psycopg2://{user}:{password}@{host}:5432/{database}")
-   ```
+1. **Conexão:** Estabelece comunicação segura com o PostgreSQL utilizando `SQLAlchemy`.
 2. **Inserção Histórica:** Os dados são gravados na tabela `sp_weather`. A estratégia de inserção utiliza o parâmetro `if_exists='append'`, garantindo que o pipeline construa um histórico contínuo (série temporal) a cada nova execução, sem sobrescrever o passado.
 3. **Auditoria e Validação:** Após o *commit*, o script realiza um `SELECT COUNT(*)` diretamente no banco. Esse total de registros é logado no console, permitindo auditar o crescimento da base e garantir o sucesso da transação.
 
 ---
 
-## 🕸️ Fluxo da DAG no Apache Airflow
+## 📊 Orquestração e Fluxo da DAG (Apache Airflow)
 
-A DAG `weather_pipeline` foi configurada para rodar **a cada hora** (`0 */1 * * *`) e conta com as seguintes configurações principais:
-* `depends_on_past`: False
-* `retries`: 2 tentativas (com 5 minutos de intervalo em caso de instabilidade da API)
-* `catchup`: False
+**Arquivo:** `dags/weather_pipeline.py`
+
+O fluxo de execução e as dependências das tarefas são gerenciados pelo **Apache Airflow**. A DAG foi configurada para ser executada de hora em hora, de forma autônoma. 
+
+### Definição das Tasks e Ordem de Execução
+
+O pipeline é dividido em tarefas atômicas (usando a Taskflow API do Airflow):
+
+```python
+@task
+def extract():
+    extract_weather_data(url)
+
+@task
+def transform():
+    df = data_transformations()
+    # Salvando em Parquet para trânsito entre as tasks
+    df.to_parquet('/opt/airflow/data/temp_data.parquet', index=False)
+
+@task
+def load():
+    import pandas as pd
+    df = pd.read_parquet('/opt/airflow/data/temp_data.parquet')
+    load_weather_data('sp_weather', df)
+
+# Definição do fluxo e dependências
+extract() >> transform() >> load()
+```
+
+### 💡 Decisão Arquitetural: Por que utilizar o formato Parquet?
+Em vez de trafegar o DataFrame diretamente pelo banco de metadados do Airflow (via XCom), optou-se por salvar um arquivo temporário na etapa de transformação e lê-lo na etapa de carga. Essa prática traz vantagens cruciais:
+* **Eficiência de Armazenamento:** Sendo um formato binário colunar, o Parquet é extremamente leve e rápido de ler/escrever.
+* **Integridade de Dados:** Preserva fielmente os tipos de dados nativos do Pandas (como *datetime* com fuso horário e *floats*), o que se perde em formatos como CSV ou JSON.
+* **Prevenção de Gargalos (XCom Limits):** Evita problemas de serialização e sobrecarga de memória no banco de dados interno do Airflow, que não foi desenhado para transitar grandes volumes de dados.
 
 ### 🏗️ Arquitetura do Pipeline
 
@@ -101,20 +124,6 @@ graph LR
     style DB fill:#316192,color:#fff,stroke:#333
     style PARQUET fill:#fff,stroke:#150458,stroke-width:2px
 ```
-
-## 📊 Modelagem de Dados
-
-Abaixo estão os principais dados extraídos e processados que compõem a tabela final `sp_weather`:
-
-| Categoria | Colunas |
-| :--- | :--- |
-| **Identificação** | `city_id`, `city_name`, `country` |
-| **Tempo** | `datetime`, `timezone`, `sunrise`, `sunset` |
-| **Geolocalização** | `longitude`, `latitude` |
-| **Temperatura (°C)** | `temperature`, `feels_like`, `temp_min`, `temp_max` |
-| **Condições Atmosféricas** | `pressure`, `humidity`, `sea_level`, `grnd_level` |
-| **Vento e Nuvens** | `wind_speed`, `wind_deg`, `wind_gust`, `clouds`, `visibility` |
-| **Clima (Descritivo)** | `weather_id`, `weather_main`, `weather_description` |
 
 ---
 
@@ -181,7 +190,7 @@ docker-compose up -d --build
 
 1. Abra o seu navegador e acesse a URL: `http://localhost:8080`
 2. Faça o login utilizando as credenciais padrão (geralmente `airflow` para usuário e senha, dependendo do seu docker-compose).
-3. Localize a DAG `weather_pipeline`, ative o botão (unpause) e acompanhe a execução automática!
+3. Localize a DAG, ative o botão (unpause) e acompanhe a execução automática!
 
 ---
 
