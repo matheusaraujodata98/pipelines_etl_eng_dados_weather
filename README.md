@@ -139,4 +139,4 @@ docker-compose up -d --build
 * [LinkedIn](https://www.linkedin.com/in/matheus-araujo-dados/)
 
 ---
-*Projeto desenvolvido para consolidação de arquiteturas modernas em Engenharia de Dados.*
+*Projeto desenvolvido para fim de estudos voltado para a Engenharia de Dados*
