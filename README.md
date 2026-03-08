@@ -14,32 +14,62 @@ Este projeto é um pipeline de **ETL (Extract, Transform, Load)** desenvolvido p
 
 O sistema consome a API do **OpenWeatherMap**, realiza a limpeza e desestruturação de dados complexos em JSON usando **Pandas**, armazena temporariamente em formato otimizado **Parquet** e carrega os resultados finais em um banco de dados relacional. Todo o fluxo é orquestrado pelo **Apache Airflow**, com execuções agendadas de hora em hora.
 
-## ⚙️ Detalhamento do ETL e Regras de Negócio
+---
 
-### 1. Extração (Extract)
-* **Fonte:** API OpenWeatherMap (consultando `Sao Paulo,BR` com parâmetros de unidade no sistema métrico, garantindo que a temperatura já venha em graus Celsius).
-* **Processo:** Requisição HTTP gerenciada pela task `extract`, salvando o dado bruto no formato `weather_data.json`.
+## ⚙️ Detalhamento das Etapas do ETL
 
-### 2. Transformação (Transform)
-Processamento feito na memória utilizando o `pandas` através da função `data_transformation()`. As regras aplicadas incluem:
-* **Leitura e Normalização:** Criação do DataFrame a partir do JSON e normalização ('flattening') dos dados aninhados da coluna `weather` (extraindo `weather_id`, `weather_main`, e `weather_description`).
-* **Limpeza:** Remoção de colunas desnecessárias para o negócio (como ícones de clima e tipos de sistema interno).
-* **Padronização:** Renomeação completa de chaves do JSON para nomes de colunas claros no banco de dados (ex: `main.temp` virou `temperature`, `coord.lon` virou `longitude`).
-* **Conversão de Tempo:** Conversão dos timestamps Unix (`dt`, `sunrise`, `sunset`) para o fuso horário local (`America/Sao_Paulo`).
-* **Armazenamento Intermediário:** Os dados tratados são salvos no formato colunar `.parquet` para ganho de performance na leitura da próxima etapa.
+### 📥 ETAPA 1: Extração (Extract)
+**Script:** `src/extract_data.py`
 
-### 3. Carga (Load)
-A task `load` lê o arquivo temporário `.parquet` e insere os dados de forma estruturada na tabela `sp_weather` do banco de dados (PostgreSQL), garantindo que os dados estejam prontos para consumo por ferramentas de BI ou Cientistas de Dados.
+A primeira fase do pipeline é responsável por buscar os dados em tempo real. O script realiza uma requisição HTTP (GET) direcionada à API do OpenWeatherMap. Para garantir a confiabilidade da ingestão, o código valida o *status code* da resposta (esperando um `200 OK`). Em caso de sucesso, o payload (dado bruto) é salvo localmente no diretório `data/weather_data.json`.
+
+**Métricas e dados coletados:**
+* Temperaturas (Atual, Mínima, Máxima) e Sensação Térmica.
+* Indicadores atmosféricos: Umidade e Pressão.
+* Dinâmica do ar: Velocidade e direção do vento, além do nível de nebulosidade.
+* Astronomia local: Horários exatos do nascer e pôr do sol.
+* Coordenadas geográficas da medição.
+
+### 🔄 ETAPA 2: Transformação (Transform)
+**Script:** `src/transform_data.py`
+
+Nesta etapa, o dado bruto em JSON é processado e modelado para uso analítico através de 5 sub-etapas utilizando o `pandas`:
+
+1. **Ingestão e Achatamento:** O arquivo JSON é lido e convertido em um DataFrame. Utiliza-se a função `pd.json_normalize()` para "achatar" (flatten) as estruturas de dados iniciais.
+2. **Descompactação da coluna 'Weather':** Como a coluna climática vem estruturada como uma lista de dicionários, o script a desmembra para extrair atributos específicos (`weather_id`, `weather_main`, `weather_description` e `weather_icon`), concatenando-os ao DataFrame principal.
+3. **Limpeza de Atributos:** Colunas que não agregam valor analítico ao negócio são descartadas para poupar armazenamento:
+   ```python
+   columns_to_drop = ['weather', 'weather_icon', 'sys.type']
+   ```
+4. **Padronização de Nomenclatura:** Chaves complexas ou aninhadas são renomeadas para o padrão inglês claro (ex: `main.temp` torna-se `temperature`, `sys.sunrise` torna-se `sunrise`).
+5. **Normalização Temporal:** Tratamento de fuso horário, convertendo timestamps Unix para o formato datetime na *timezone* correta de São Paulo:
+   ```python
+   columns_to_normalize = ['datetime', 'sunrise', 'sunset']
+   # Converte para datetime do fuso horário de São Paulo
+   df[col] = pd.to_datetime(df[col], unit='s', utc=True).dt.tz_convert('America/Sao_Paulo')
+   ```
+*Resultado:* Um DataFrame íntegro, limpo e preparado para o banco de dados.
+
+### 💾 ETAPA 3: Carga (Load)
+**Script:** `src/load_data.py`
+
+A etapa final persiste os dados transformados em um Data Warehouse/Data Mart local.
+
+1. **Conexão:** Estabelece comunicação segura com o PostgreSQL utilizando `SQLAlchemy`:
+   ```python
+   engine = create_engine(f"postgresql+psycopg2://{user}:{password}@{host}:5432/{database}")
+   ```
+2. **Inserção Histórica:** Os dados são gravados na tabela `sp_weather`. A estratégia de inserção utiliza o parâmetro `if_exists='append'`, garantindo que o pipeline construa um histórico contínuo (série temporal) a cada nova execução, sem sobrescrever o passado.
+3. **Auditoria e Validação:** Após o *commit*, o script realiza um `SELECT COUNT(*)` diretamente no banco. Esse total de registros é logado no console, permitindo auditar o crescimento da base e garantir o sucesso da transação.
+
+---
 
 ## 🕸️ Fluxo da DAG no Apache Airflow
 
 A DAG `weather_pipeline` foi configurada para rodar **a cada hora** (`0 */1 * * *`) e conta com as seguintes configurações principais:
 * `depends_on_past`: False
-* `retries`: 2 tentativas (com 5 minutos de intervalo em caso de falha da API)
+* `retries`: 2 tentativas (com 5 minutos de intervalo em caso de instabilidade da API)
 * `catchup`: False
-
-**Ordem de Execução das Tasks:**
-`extract()` ➔ `transform()` ➔ `load()`
 
 ### 🏗️ Arquitetura do Pipeline
 
@@ -59,10 +89,10 @@ graph LR
     end
 
     %% Conectando o fluxo
-    API -->|Requisição HTTP| T1
-    T1 -->|Salva| JSON_RAW
+    API -->|HTTP GET| T1
+    T1 -->|Salva Raw| JSON_RAW
     JSON_RAW -->|Lê| T2
-    T2 -->|Limpa e Converte fuso| PARQUET
+    T2 -->|Limpa e Modela| PARQUET
     PARQUET -->|Lê via Pandas| T3
     T3 -->|SQLAlchemy| DB
 
@@ -85,14 +115,6 @@ Abaixo estão os principais dados extraídos e processados que compõem a tabela
 | **Condições Atmosféricas** | `pressure`, `humidity`, `sea_level`, `grnd_level` |
 | **Vento e Nuvens** | `wind_speed`, `wind_deg`, `wind_gust`, `clouds`, `visibility` |
 | **Clima (Descritivo)** | `weather_id`, `weather_main`, `weather_description` |
-
-## 🛠️ Tecnologias e Stack Detalhada
-
-* **Core & Orquestração:** Python 3.14+, Apache Airflow
-* **Processamento de Dados:** `pandas`
-* **Armazenamento e Transporte:** Arquivos `.json` (Raw) e `.parquet` (Staging)
-* **Banco de Dados:** PostgreSQL (`SQLAlchemy`, `psycopg2`)
-* **Gerenciamento de Ambiente:** `python-dotenv` (para ocultar a API_KEY de forma segura)
 
 ---
 
@@ -163,4 +185,4 @@ docker-compose up -d --build
 
 ---
 
-*Projeto desenvolvido para fim de estudos voltado para a Engenharia de Dados*
+*Projeto desenvolvido para fins de estudos voltado para a Engenharia de Dados.*
